@@ -1,0 +1,59 @@
+name: astrbot-minimax-office
+
+services:
+  office-worker:
+    profiles: [build-only]
+    image: ${OFFICE_WORKER_IMAGE:-astrbot-minimax-office-worker:local}
+    build:
+      context: .
+      dockerfile: runtime/Dockerfile.worker
+
+  office-runtime:
+    image: ${OFFICE_CONTROLLER_IMAGE:-astrbot-minimax-office-runtime:local}
+    build:
+      context: .
+      dockerfile: runtime/Dockerfile.controller
+    init: true
+    restart: unless-stopped
+    cpus: 1.0
+    mem_limit: 512m
+    memswap_limit: 512m
+    pids_limit: 128
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      OFFICE_RUNTIME_TOKEN: ${OFFICE_RUNTIME_TOKEN:?请在 .env 中设置至少 32 字符的随机令牌}
+      OFFICE_WORKER_IMAGE: ${OFFICE_WORKER_IMAGE:-astrbot-minimax-office-worker:local}
+      OFFICE_DATA_ROOT: /data
+      OFFICE_HOST_DATA_ROOT: ${OFFICE_HOST_DATA_ROOT:?请设置 Docker 宿主机上的绝对数据目录}
+      OFFICE_OWNER_QUOTA_BYTES: ${OFFICE_OWNER_QUOTA_BYTES:-209715200}
+      OFFICE_GLOBAL_QUOTA_BYTES: ${OFFICE_GLOBAL_QUOTA_BYTES:-2147483648}
+      OFFICE_RETENTION_SECONDS: ${OFFICE_RETENTION_SECONDS:-604800}
+      NO_PROXY: localhost,127.0.0.1,office-runtime
+    volumes:
+      - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+      - ${OFFICE_HOST_DATA_ROOT:?请设置 Docker 宿主机上的绝对数据目录}:/data
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=128m
+    ports:
+      - ${OFFICE_BIND_ADDRESS:-127.0.0.1}:${OFFICE_PORT:-8030}:8030
+    networks:
+      office-bot:
+        aliases: [office-runtime]
+    healthcheck:
+      test: [CMD, /opt/office-controller-venv/bin/python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8030/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  office-bot:
+    external: true
+    name: ${ASTRBOT_NETWORK:-astrbot_bot}

@@ -1,0 +1,80 @@
+FROM mcr.microsoft.com/dotnet/sdk:8.0.416-bookworm-slim AS dotnet
+
+FROM soulter/astrbot@sha256:c93a6d19507ba45474c3dfb82aad9d36eb432a478112f13c7e6325b5ebffc5f2 AS worker
+
+ARG DEBIAN_FRONTEND=noninteractive
+ENV NUGET_PACKAGES=/opt/office-worker/nuget-packages
+
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       ca-certificates fontconfig fonts-noto-cjk fonts-noto-core fonts-liberation \
+       fonts-wqy-zenhei chromium default-jre-headless \
+       libreoffice-calc libreoffice-impress libreoffice-writer pandoc \
+       poppler-utils zip unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=dotnet /usr/share/dotnet /usr/share/dotnet
+RUN ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet \
+    && dotnet --info >/dev/null
+
+COPY runtime/requirements-worker.txt /opt/office-worker/requirements-worker.txt
+RUN python -m pip install --no-cache-dir --requirement /opt/office-worker/requirements-worker.txt
+
+COPY runtime/package.json /opt/office-worker/package.json
+WORKDIR /opt/office-worker
+RUN npm install --omit=dev --ignore-scripts=false \
+    && npm cache clean --force
+
+COPY skills /opt/skills
+RUN dotnet restore /opt/skills/minimax-docx/scripts/dotnet/MiniMaxAIDocx.Cli/MiniMaxAIDocx.Cli.csproj \
+    && dotnet build /opt/skills/minimax-docx/scripts/dotnet/MiniMaxAIDocx.Cli/MiniMaxAIDocx.Cli.csproj \
+       --configuration Debug --no-restore \
+    && dotnet publish /opt/skills/minimax-docx/scripts/dotnet/MiniMaxAIDocx.Cli/MiniMaxAIDocx.Cli.csproj \
+       --configuration Debug --no-build --no-restore --output /opt/office-worker/minimax-docx-cli \
+    && bash /opt/skills/minimax-docx/scripts/env_check.sh >/opt/office-worker/minimax-docx-env-check.txt
+
+COPY runtime/worker/csharp-deps.csproj /tmp/csharp-deps/csharp-deps.csproj
+RUN dotnet restore /tmp/csharp-deps/csharp-deps.csproj \
+    && dotnet publish /tmp/csharp-deps/csharp-deps.csproj --configuration Release \
+       --no-restore --output /opt/office-worker/dotnet-libs \
+    && cp /opt/office-worker/minimax-docx-cli/*.dll /opt/office-worker/dotnet-libs/ \
+    && test -f /opt/office-worker/dotnet-libs/DocumentFormat.OpenXml.dll \
+    && test -f /opt/office-worker/dotnet-libs/DocumentFormat.OpenXml.Framework.dll \
+    && test -f /opt/office-worker/dotnet-libs/MiniMaxAIDocx.Core.dll \
+    && rm -rf /tmp/csharp-deps /root/.dotnet
+
+COPY runtime/worker/run_task.py /opt/office-worker/run_task.py
+COPY runtime/worker/run-task /opt/office-worker/run-task
+COPY runtime/worker/run_held_task.py /opt/office-worker/run_held_task.py
+COPY runtime/worker/run-held-task /opt/office-worker/run-held-task
+COPY runtime/worker/minimax-docx-cli /usr/local/bin/minimax-docx-cli
+RUN chmod 0555 /opt/office-worker/run-task /opt/office-worker/run_task.py \
+       /opt/office-worker/run-held-task /opt/office-worker/run_held_task.py \
+       /usr/local/bin/minimax-docx-cli \
+    && mkdir -p /work/input /work/output /work/source \
+    && chown -R 10001:10001 /work \
+    && fc-cache -f \
+    && python -c "import lxml, openpyxl, pandas, pptx, reportlab, pypdf, fitz, markitdown, matplotlib" \
+    && node -e "require('pptxgenjs'); require('playwright'); require('sharp')" \
+    && chromium --version \
+    && soffice --version \
+    && pandoc --version | head -n 1
+
+ENV PATH="/usr/share/dotnet:/opt/office-worker/minimax-docx-cli:${PATH}" \
+    DOTNET_ROOT=/usr/share/dotnet \
+    DOTNET_NOLOGO=1 \
+    DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    NODE_PATH=/opt/office-worker/node_modules \
+    CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    HOME=/tmp/home \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    SAL_USE_VCLPLUGIN=svp
+
+USER 10001:10001
+WORKDIR /work/source
+CMD ["/opt/office-worker/run-task"]

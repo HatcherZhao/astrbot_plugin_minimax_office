@@ -1,0 +1,44 @@
+{
+  "runtime_url": {
+    "description": "隔离 Office 执行服务地址",
+    "type": "string",
+    "default": "http://office-runtime:8030"
+  },
+  "runtime_token": {
+    "description": "执行服务共享令牌（仅后台填写）",
+    "type": "string",
+    "default": "",
+    "obvious_hint": true,
+    "_secret": true
+  },
+  "enable_in_group": {
+    "description": "允许在群聊使用",
+    "type": "bool",
+    "default": true
+  },
+  "require_at_in_group": {
+    "description": "群聊必须 @ 或唤醒机器人",
+    "type": "bool",
+    "default": true
+  },
+  "max_upload_mb": {
+    "description": "单个附件大小上限（MiB，不得超过服务端 25）",
+    "type": "int",
+    "default": 25
+  },
+  "run_wait_seconds": {
+    "description": "工具提交任务后最多等待秒数",
+    "type": "int",
+    "default": 45
+  },
+  "poll_interval_seconds": {
+    "description": "后台任务轮询间隔秒数",
+    "type": "int",
+    "default": 3
+  },
+  "artifact_retention_days": {
+    "description": "已下载产物保留天数",
+    "type": "int",
+    "default": 7
+  }
+}

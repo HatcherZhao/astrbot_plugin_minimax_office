@@ -1,0 +1,38 @@
+[
+  {
+    "skill": "minimax-docx",
+    "upstream_skill_sha256": "45c169630f30b8f034bc7d53edf73d592fbd82e82188beec7da3ca1996a97fb5",
+    "source": "https://github.com/MiniMax-AI/skills",
+    "license": "MIT",
+    "upstream_commit": "33cdc32a8e9905f4eedab7246e4779df48a06922",
+    "upstream_path": "skills/minimax-docx",
+    "upstream_tree": "e55cc73859c0fd9bcd6507f062eedca0f470a7ed"
+  },
+  {
+    "skill": "minimax-xlsx",
+    "upstream_skill_sha256": "4ffb70af6ccd00e90c3b14516d50a850ae0f2f1807a01d326aa1393e0067dd41",
+    "source": "https://github.com/MiniMax-AI/skills",
+    "license": "MIT",
+    "upstream_commit": "33cdc32a8e9905f4eedab7246e4779df48a06922",
+    "upstream_path": "skills/minimax-xlsx",
+    "upstream_tree": "5df30fd8f8669f34850767e1d99ba93c97d6ffc7"
+  },
+  {
+    "skill": "pptx-generator",
+    "upstream_skill_sha256": "6eeb36239fdef35ab133ca462e1ec4674cb96dd9c5cd63da39c29151899bda10",
+    "source": "https://github.com/MiniMax-AI/skills",
+    "license": "MIT",
+    "upstream_commit": "33cdc32a8e9905f4eedab7246e4779df48a06922",
+    "upstream_path": "skills/pptx-generator",
+    "upstream_tree": "871f9dcc96fb46f1ee7883b8fed87140b430a2ae"
+  },
+  {
+    "skill": "minimax-pdf",
+    "upstream_skill_sha256": "8b0497ddd27da142deb09b570a56f702f95e5f3f1e192cfe1ae24421416a408d",
+    "source": "https://github.com/MiniMax-AI/skills",
+    "license": "MIT",
+    "upstream_commit": "33cdc32a8e9905f4eedab7246e4779df48a06922",
+    "upstream_path": "skills/minimax-pdf",
+    "upstream_tree": "ce691d0e4e34b7f1d73bd3c3560b658df0dbdb3a"
+  }
+]

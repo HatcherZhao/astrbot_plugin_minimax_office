@@ -1,0 +1,15 @@
+{
+  "name": "minimax-office-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MiniMax Office 隔离任务运行时依赖",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "pptxgenjs": "4.0.1",
+    "playwright": "1.56.1",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-icons": "5.5.0",
+    "sharp": "0.34.5"
+  }
+}
