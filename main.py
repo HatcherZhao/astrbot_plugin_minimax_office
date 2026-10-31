@@ -46,7 +46,7 @@ SUPPORTED_ARTIFACTS = {
 ALLOWED_SKILLS = {"minimax-docx", "minimax-xlsx", "pptx-generator", "minimax-pdf"}
 
 
-@register(PLUGIN_NAME, "zhaoyuqing", "隔离运行 MiniMax Word、Excel、PPT、PDF 技能", "1.1.0")
+@register(PLUGIN_NAME, "zhaoyuqing", "隔离运行 MiniMax Word、Excel、PPT、PDF 技能", "1.1.1")
 class MiniMaxOfficePlugin(Star):
     """只负责可信附件、身份隔离和任务交付，生成代码在独立 worker 执行。"""
 
@@ -302,6 +302,25 @@ class MiniMaxOfficePlugin(Star):
             ensure_ascii=False,
         )
         req.prompt = f"{req.prompt or ''}\n\n{notice}".strip()
+
+    @filter.on_llm_request(priority=-10000)
+    async def pin_current_request(self, event: AstrMessageEvent, req: ProviderRequest):
+        """在记忆注入之后重申本轮要求，避免历史完成记录替代新的修改任务。"""
+        raw = str(getattr(event, "message_str", "") or "").strip()
+        if not raw or not self._eligible(event) or not has_document_intent(raw, False, False):
+            return
+        req.system_prompt = (req.system_prompt or "") + (
+            "\n【本轮任务优先】记忆和历史中‘已完成/已发送’只代表以前的版本。"
+            "当前用户明确要求生成、修改或重新整理文件时，按本轮要求实际调用工具完成；"
+            "不能仅称上次已经做过，也不能在要求已清楚时反问是否要重做。"
+            "当前消息若只是咨询或讨论，仍按其本意回答。"
+            "视频图文整理的真实画面指原视频截图；旧流程图版不能充当截图版。"
+        )
+        req.prompt = (req.prompt or "") + "\n\n[本轮用户原始要求，历史材料仅供参考]\n" + raw
+        names = req.func_tool.names() if req.func_tool else []
+        logger.info("[MiniMax Office] 本轮任务已保留，工具可用: video=%s frames=%s publish=%s",
+                    "video_omni_understand" in names, "video_omni_frames" in names,
+                    "minimax_office_publish" in names)
 
     @filter.llm_tool(name="minimax_office_guide")
     async def minimax_office_guide(

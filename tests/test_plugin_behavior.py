@@ -323,6 +323,15 @@ class PluginBehaviorTests(unittest.IsolatedAsyncioTestCase):
             FakeEvent(sender="106", is_at=True)
         ))
 
+    async def test_current_request_follows_old_completion_memory(self):
+        event = FakeEvent(is_at=True)
+        event.message_str = "把刚才那个视频重新整理成图文并茂的 PDF"
+        req = types.SimpleNamespace(prompt=event.message_str + "\n历史记忆：已经做过七页流程图版", system_prompt="当前人格", func_tool=None)
+        await self.plugin.pin_current_request(event, req)
+        self.assertTrue(req.prompt.endswith(event.message_str))
+        self.assertTrue(req.system_prompt.startswith("当前人格"))
+        self.assertIn("只代表以前的版本", req.system_prompt)
+
     async def test_multiple_revisions_stay_drafts_until_final_selection(self):
         event = FakeEvent(is_at=True)
         owner = self.plugin._owner(event)
