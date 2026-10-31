@@ -157,3 +157,14 @@ class RuntimeClientTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VideoDocumentPolicyTests(unittest.TestCase):
+    """图文要求约束与纯文字请求可以明确区分。"""
+    def test_video_images_and_text_only(self):
+        from policy import video_images_requested
+        self.assertTrue(video_images_requested("把视频重新做成图文PDF"))
+        self.assertTrue(video_images_requested("图文PDF", [{"role":"user","content":"https://bilibili.com/video/BV1kERuBYEyy"}]))
+        self.assertFalse(video_images_requested("视频做纯文字PDF，不要配图"))
+        self.assertFalse(video_images_requested("整理一份销售图文报告"))
+        self.assertTrue(video_images_requested("视频做PDF，不要流程图，用截图"))

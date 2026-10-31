@@ -323,6 +323,35 @@ class PluginBehaviorTests(unittest.IsolatedAsyncioTestCase):
             FakeEvent(sender="106", is_at=True)
         ))
 
+    async def test_video_document_without_frames_never_submits_job(self):
+        event = FakeEvent(is_at=True)
+        event.message_str = "把刚才那个视频重新整理成图文并茂的 PDF"
+        result = json.loads(await self.plugin.minimax_office_run(event, "python", "print('chart only')"))
+        self.assertEqual(result["state"], "blocked")
+        self.assertEqual(result["required_tool"], "video_omni_frames")
+        self.assertEqual(event.sent, [])
+
+    async def test_old_diagram_document_cannot_publish_as_video_images(self):
+        event = FakeEvent(is_at=True)
+        event.message_str = "重新整理视频图文PDF"
+        self.plugin.store.add_job("old", self.plugin._owner(event), event.unified_msg_origin, event.sender, delivery_mode="draft")
+        self.plugin.client.job_result = {"state": "succeeded", "artifacts": [{"artifact_id":"a","filename":"old.pdf"}]}
+        result = json.loads(await self.plugin.minimax_office_publish(event, "old", ["a"]))
+        self.assertEqual(result["state"], "blocked")
+        self.assertEqual(event.sent, [])
+
+    async def test_failed_pixel_verification_blocks_publication(self):
+        from unittest.mock import AsyncMock
+        event = FakeEvent(is_at=True)
+        self.plugin.store.add_job("draft", self.plugin._owner(event), event.unified_msg_origin, event.sender, delivery_mode="draft")
+        self.plugin.store.set_video_contract("draft", [{"file_id":"frame","input_name":"frame.jpg"}])
+        self.plugin.client.job_result = {"state":"succeeded","artifacts":[{"artifact_id":"a","filename":"a.pdf"}]}
+        self.plugin._verify_video_artifacts = AsyncMock(return_value={"passed":False,"documents":[{"missing_frames":["frame"]}]})
+        result = json.loads(await self.plugin.minimax_office_publish(event, "draft", ["a"]))
+        self.assertEqual(result["state"], "blocked")
+        self.assertIsNone(self.plugin.store.job("draft")["publication"])
+        self.assertEqual(event.sent, [])
+
     async def test_current_request_follows_old_completion_memory(self):
         event = FakeEvent(is_at=True)
         event.message_str = "把刚才那个视频重新整理成图文并茂的 PDF"

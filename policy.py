@@ -34,3 +34,19 @@ def can_execute_tools(
 def has_document_intent(text: str | None, has_files: bool, tool_flow: bool) -> bool:
     """只在当前轮明确文档任务时屏蔽机器人本机执行工具。"""
     return bool(has_files or tool_flow or _DOCUMENT_INTENT.search(str(text or "")))
+
+
+def text_only_requested(text: str) -> bool:
+    """明确要求移除图片时允许纯文字交付。"""
+    return bool(re.search(r"纯文字|纯文本|不要配图|不要图片|不要截图|不需要图片|去掉(?:全部)?(?:图片|截图)|移除(?:全部)?(?:图片|截图)", text or ""))
+
+
+def video_images_requested(text: str, contexts=None) -> bool:
+    """识别明确的视频图文要求，不改变主模型对其他任务的自由处理。"""
+    if text_only_requested(text) or not has_document_intent(text, False, False):
+        return False
+    if not re.search(r"图文|截图|配图|原片|视频画面", text or ""):
+        return False
+    recent = "\n".join(str(x.get("content", "")) for x in (contexts or [])[-12:]
+                       if isinstance(x, dict) and x.get("role") == "user")
+    return bool(re.search(r"视频|BV[0-9A-Za-z]{10}|bilibili\.com|b23\.tv", (text or "") + "\n" + recent))

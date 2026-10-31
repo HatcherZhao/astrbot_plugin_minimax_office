@@ -101,6 +101,22 @@ class StateStore:
             self._save()
             return True
 
+    def set_video_contract(self, job_id: str, frames: list[dict]) -> None:
+        """记录来自可信截图工具的输入证据，后续轮次和重启仍须校验。"""
+        with self._lock:
+            value = self._data["jobs"].get(job_id)
+            if value is not None:
+                value["video_frames"] = deepcopy(frames)
+                self._save()
+
+    def set_video_inspection(self, job_id: str, inspection: dict) -> None:
+        """保存隔离验证任务，查询超时后复用而非重复创建。"""
+        with self._lock:
+            value = self._data["jobs"].get(job_id)
+            if value is not None:
+                value["video_inspection"] = deepcopy(inspection)
+                self._save()
+
     def job(self, job_id: str) -> dict | None:
         """读取任务路由副本。"""
         with self._lock:

@@ -22,7 +22,8 @@ from astrbot.core.provider.entities import ProviderRequest
 
 from .attachments import download_public_url
 from .identity import owner_key, safe_filename
-from .policy import can_capture_files, can_execute_tools, has_document_intent
+from .policy import can_capture_files, can_execute_tools, has_document_intent, video_images_requested, text_only_requested
+from .video_evidence import validation_code
 from .runtime_client import RuntimeClient, RuntimeErrorPublic
 from .state import StateStore
 
@@ -46,7 +47,7 @@ SUPPORTED_ARTIFACTS = {
 ALLOWED_SKILLS = {"minimax-docx", "minimax-xlsx", "pptx-generator", "minimax-pdf"}
 
 
-@register(PLUGIN_NAME, "zhaoyuqing", "隔离运行 MiniMax Word、Excel、PPT、PDF 技能", "1.1.1")
+@register(PLUGIN_NAME, "zhaoyuqing", "隔离运行 MiniMax Word、Excel、PPT、PDF 技能", "1.2.0")
 class MiniMaxOfficePlugin(Star):
     """只负责可信附件、身份隔离和任务交付，生成代码在独立 worker 执行。"""
 
@@ -256,6 +257,8 @@ class MiniMaxOfficePlugin(Star):
                 for name in TOOL_NAMES:
                     req.func_tool.remove_tool(name)
             return
+        raw = str(getattr(event, "message_str", "") or "")
+        event.set_extra("_office_require_video_frames", video_images_requested(raw, getattr(req, "contexts", None)))
         files = self.store.files(self._owner(event))
         current_upload = bool(event.get_extra("_minimax_office_uploaded"))
         text = str(req.prompt or "")
@@ -293,6 +296,7 @@ class MiniMaxOfficePlugin(Star):
                 for key in (
                     "file_id", "filename", "input_name", "size", "sha256",
                     "generated", "reusable", "reusable_reason",
+                    "source_kind", "source_video_id", "source_seconds", "video_frames",
                 )
             }
             for item in files[-10:]
@@ -403,6 +407,7 @@ class MiniMaxOfficePlugin(Star):
                 for key in (
                     "file_id", "filename", "input_name", "size", "sha256",
                     "generated", "reusable", "reusable_reason",
+                    "source_kind", "source_video_id", "source_seconds", "video_frames",
                 )
             }
             for item in files
@@ -468,6 +473,19 @@ class MiniMaxOfficePlugin(Star):
         ids = [str(value) for value in (input_file_ids or [])]
         if len(ids) > 10 or not set(ids).issubset(self.store.owned_file_ids(self._owner(event))):
             return "输入文件 ID 不属于当前用户，或数量超过 10。"
+        raw = str(getattr(event, "message_str", "") or "")
+        selected = [f for f in self.store.files(self._owner(event)) if f.get("file_id") in ids]
+        frames = {}
+        for record in selected:
+            sources = ([record] if record.get("source_kind") == "video_frame" else record.get("video_frames", []))
+            for source in sources:
+                frames[source["file_id"]] = {k: source[k] for k in ("file_id", "input_name", "source_video_id", "source_seconds") if k in source}
+        required = bool(event.get_extra("_office_require_video_frames") or video_images_requested(raw) or frames)
+        if text_only_requested(raw):
+            required, frames = False, {}
+        if required and not frames:
+            return json.dumps({"state": "blocked", "required_tool": "video_omni_frames",
+                "message": "本轮要求视频图文文件，但输入中没有原片截图。先根据视频时间线调用 video_omni_frames，再将返回的 office_input.file_id 传入 input_file_ids。流程图不能替代原片截图。"}, ensure_ascii=False)
         timeout_seconds = min(max(int(timeout_seconds), 10), 300)
         owner = self._owner(event)
         response = await self.client.submit_job(owner, language, code, ids, timeout_seconds)
@@ -480,6 +498,8 @@ class MiniMaxOfficePlugin(Star):
             "sender_id": self._sender_id(event),
         }
         self.store.add_job(job_id, **route, delivery_mode="draft")
+        if frames:
+            self.store.set_video_contract(job_id, list(frames.values()))
         deadline = asyncio.get_running_loop().time() + self.wait_seconds
         while asyncio.get_running_loop().time() < deadline:
             status = await self.client.job(owner, job_id)
@@ -531,9 +551,63 @@ class MiniMaxOfficePlugin(Star):
         available = {str(a.get("artifact_id")) for a in status.get("artifacts", [])}
         if not artifact_ids or not set(artifact_ids).issubset(available):
             return "必须从本任务产物中明确选择最终 artifact_ids。"
+        if (event.get_extra("_office_require_video_frames") or video_images_requested(str(getattr(event, "message_str", "") or ""))) and not route.get("video_frames"):
+            return json.dumps({"state": "blocked", "message": "这个旧任务没有原片截图证据，不能作为本轮视频图文最终版。请先提取视频截图，重新生成文件。"}, ensure_ascii=False)
+        if route.get("video_frames"):
+            verification = await self._verify_video_artifacts(job_id, status, artifact_ids)
+            if not verification.get("passed"):
+                return json.dumps({"state": "blocked", "video_verification": verification,
+                    "message": "成品尚未通过原片截图校验，未发送。请用真实截图修正文档并再次检查；验证仍在运行时重试当前 publish，不要绕过校验发送。"}, ensure_ascii=False)
         if not self.store.authorize_publication(job_id, artifact_ids):
             return "本任务已经选定其他最终产物；不能更换已发布选择。"
         return await self._finish_for_event(event, job_id, status)
+
+    async def _verify_video_artifacts(self, job_id: str, status: dict, artifact_ids: list[str]) -> dict:
+        """在既有隔离 worker 检查页面中的截图像素，而非仅判断图片数量。"""
+        route = self.store.job(job_id) or {}
+        inspection = route.get("video_inspection") or {}
+        selection = sorted(set(artifact_ids))
+        if inspection.get("selection") == selection and inspection.get("result", {}).get("passed"):
+            return inspection["result"]
+        owner = str(route["owner"])
+        if inspection.get("selection") != selection or not inspection.get("job_id"):
+            # 初次检查必须仍为草稿，准备输入不会向平台发文件。
+            if route.get("publication") is not None:
+                return {"passed": False, "error": "任务已选定交付内容，无法更换验证选择"}
+            await self._deliver(job_id, status)
+            files = {f.get("source_artifact_id"): f for f in self.store.files(owner)
+                     if f.get("source_job_id") == job_id}
+            documents = []
+            for artifact in selection:
+                record = files.get(artifact, {})
+                if not record.get("file_id"):
+                    return {"passed": False, "error": "成品未登记为可检查输入"}
+                documents.append({"artifact_id": artifact, "file_id": record["file_id"], "input_name": record["input_name"]})
+            frames = route["video_frames"]
+            ids = list(dict.fromkeys([d["file_id"] for d in documents] + [f["file_id"] for f in frames]))
+            if len(ids) > 10:
+                return {"passed": False, "error": "文档和截图超过单任务10个输入限制，请分批交付"}
+            response = await self.client.submit_job(owner, "python", validation_code(documents, frames), ids, 60)
+            inspection = {"selection": selection, "job_id": response["job_id"]}
+            self.store.set_video_inspection(job_id, inspection)
+        deadline = asyncio.get_running_loop().time() + 20
+        while True:
+            checked = await self.client.job(owner, inspection["job_id"])
+            if checked.get("state") == "succeeded":
+                try:
+                    result = json.loads(str(checked.get("stdout") or "").strip().splitlines()[-1])
+                    if not isinstance(result.get("passed"), bool):
+                        raise ValueError("invalid result")
+                except (ValueError, IndexError, AttributeError):
+                    result = {"passed": False, "error": "截图检查返回无效结果"}
+                inspection["result"] = result
+                self.store.set_video_inspection(job_id, inspection)
+                return result
+            if checked.get("state") in {"failed", "timed_out"}:
+                return {"passed": False, "error": str(checked.get("stderr") or checked.get("error") or "截图检查失败")[-1200:]}
+            if asyncio.get_running_loop().time() >= deadline:
+                return {"passed": False, "state": "checking", "message": "截图校验仍在运行，请重试当前 publish"}
+            await asyncio.sleep(1)
 
     @filter.on_agent_done()
     async def remember_final_reply(self, event: AstrMessageEvent, run_context, response):
@@ -791,6 +865,7 @@ class MiniMaxOfficePlugin(Star):
                             "reusable": True,
                             "source_job_id": job_id,
                             "source_artifact_id": artifact_id,
+                            "video_frames": route.get("video_frames", []),
                         })
                         self.store.mark_artifact_registered(
                             job_id,
