@@ -23,6 +23,16 @@ def install_astrbot_stubs(data_dir: Path) -> None:
     message_type_module = types.ModuleType("astrbot.core.platform.message_type")
     provider_module = types.ModuleType("astrbot.core.provider.entities")
 
+    class Plain:
+        def __init__(self, text):
+            self.text = text
+
+    class At:
+        pass
+
+    class Reply:
+        pass
+
     class File:
         def __init__(self, name: str, file: str = "", url: str = ""):
             self.name, self.file_, self.url = name, file, url
@@ -57,6 +67,14 @@ def install_astrbot_stubs(data_dir: Path) -> None:
             return lambda function: function
 
         @staticmethod
+        def on_agent_done(*_args, **_kwargs):
+            return lambda function: function
+
+        @staticmethod
+        def on_decorating_result(*_args, **_kwargs):
+            return lambda function: function
+
+        @staticmethod
         def llm_tool(*_args, **_kwargs):
             return lambda function: function
 
@@ -69,6 +87,7 @@ def install_astrbot_stubs(data_dir: Path) -> None:
         def get_data_dir(cls, _name=None):
             return data_dir
 
+    components.Plain, components.At, components.Reply = Plain, At, Reply
     components.File = File
     api.message_components = components
     api.AstrBotConfig = dict
@@ -133,6 +152,12 @@ class FakeEvent:
 
     def set_extra(self, key, value):
         self.extra[key] = value
+
+    def get_extra(self, key, default=None):
+        return self.extra.get(key, default)
+
+    def get_result(self):
+        return getattr(self, "result", None)
 
 
 class FakeClient:
@@ -298,6 +323,80 @@ class PluginBehaviorTests(unittest.IsolatedAsyncioTestCase):
             FakeEvent(sender="106", is_at=True)
         ))
 
+    async def test_multiple_revisions_stay_drafts_until_final_selection(self):
+        event = FakeEvent(is_at=True)
+        owner = self.plugin._owner(event)
+        for job in ("revision1", "revision2", "final"):
+            self.plugin.store.add_job(job, owner, event.unified_msg_origin, event.sender, delivery_mode="draft")
+            status = {"state": "succeeded", "artifacts": [
+                {"artifact_id": "document", "filename": "final.pdf"},
+                {"artifact_id": "preview", "filename": "preview.png"}]}
+            result = json.loads(await self.plugin._finish_for_event(event, job, status))
+            self.assertEqual(result["delivery"], "draft")
+            self.assertEqual(len(result["artifacts"]), 2)
+            self.assertTrue(result["artifacts"][0]["file_id"])
+        self.assertEqual(event.sent, [])
+        self.assertEqual(self.context.sent, [])
+        self.plugin.client.job_result = status
+        result = json.loads(await self.plugin.minimax_office_publish(event, "final", ["document"]))
+        self.assertEqual(len(result["delivered"]), 1)
+        self.assertEqual(len(event.sent), 1)
+        self.assertEqual(len(event.sent[0].chain), 1)
+        self.assertIsInstance(event.sent[0].chain[0], self.module.Comp.File)
+        again = json.loads(await self.plugin.minimax_office_publish(event, "final", ["document"]))
+        self.assertEqual(again["delivered"], [])
+        self.assertEqual(len(event.sent), 1)
+        denied = await self.plugin.minimax_office_publish(event, "final", ["preview"])
+        self.assertIn("不能更换", denied)
+
+    async def test_draft_background_and_restart_never_deliver(self):
+        event = FakeEvent(is_at=True)
+        self.plugin.store.add_job("draft", self.plugin._owner(event), event.unified_msg_origin, event.sender, delivery_mode="draft")
+        self.plugin.client.job_result = {"state":"succeeded", "artifacts":[{"artifact_id":"doc","filename":"draft.pdf"}]}
+        # 模拟重启后的持久状态加载。
+        self.plugin.store = self.module.StateStore(self.plugin.store.path)
+        await self.plugin._poll_job("draft", self.plugin.store.job("draft"))
+        self.assertEqual(self.context.sent, [])
+        self.assertEqual(event.sent, [])
+        result = json.loads(await self.plugin.minimax_office_status(event, "draft"))
+        self.assertEqual(result["delivery"], "draft")
+        self.assertEqual(event.sent, [])
+
+    async def test_publication_checks_owner_and_artifact_ids(self):
+        event = FakeEvent(is_at=True)
+        self.plugin.store.add_job("draft", self.plugin._owner(event), event.unified_msg_origin, event.sender, delivery_mode="draft")
+        denied = await self.plugin.minimax_office_publish(FakeEvent(sender="other",is_at=True), "draft", ["a"])
+        self.assertIn("没有找到", denied)
+        self.assertFalse(self.plugin.client.job_called)
+        self.plugin.client.job_result = {"state":"succeeded", "artifacts":[{"artifact_id":"a","filename":"a.pdf"}]}
+        for selection in ([], ["foreign"]):
+            self.assertIn("明确选择", await self.plugin.minimax_office_publish(event, "draft", selection))
+        self.assertEqual(event.sent, [])
+
+    async def test_pending_final_delivery_survives_restart(self):
+        event = FakeEvent(is_at=True)
+        self.plugin.store.add_job("draft", self.plugin._owner(event), event.unified_msg_origin, event.sender, delivery_mode="draft")
+        self.plugin.store.mark_terminal("draft", "succeeded")
+        self.plugin.store.authorize_publication("draft", ["a"])
+        self.plugin.store.set_delivery_pending("draft", True)
+        restored = self.module.StateStore(self.plugin.store.path)
+        self.assertEqual([x[0] for x in restored.pending_jobs()], ["draft"])
+        self.assertEqual(restored.job("draft")["publication"], ["a"])
+
+    async def test_final_reply_keeps_persona_and_removes_work_log(self):
+        event = FakeEvent(is_at=True)
+        event.set_extra("_minimax_office_tool_flow", True)
+        final = "爸爸，弄好啦，关键截图也放进去了。"
+        await self.plugin.remember_final_reply(event, None, types.SimpleNamespace(completion_text=final))
+        full = "先查技能，然后编译，调整两次。" + final
+        event.result = types.SimpleNamespace(chain=[self.module.Comp.Plain(full)], get_plain_text=lambda: full)
+        await self.plugin.keep_final_reply(event)
+        self.assertEqual(event.result.chain[0].text, final)
+        file = self.module.Comp.File("final.pdf")
+        event.result.chain = [file]
+        await self.plugin.keep_final_reply(event)
+        self.assertIs(event.result.chain[0], file)
+
     async def test_generated_artifact_is_delivered_once_and_reusable(self):
         event = FakeEvent(sender="100", is_at=True)
         owner = self.plugin._owner(event)
@@ -364,7 +463,7 @@ class PluginBehaviorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.plugin.client.uploaded, [])
         record = next(item for item in self.plugin.store.files(owner) if item["filename"] == "large.docx")
         self.assertFalse(record["reusable"])
-        self.assertIn("输入上限", event.sent[0].chain[0])
+        self.assertTrue(all(isinstance(x, self.module.Comp.File) for x in event.sent[0].chain))
 
     async def test_failed_job_returns_error_and_process_output(self):
         event = FakeEvent(sender="105", is_at=True)

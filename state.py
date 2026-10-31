@@ -71,19 +71,35 @@ class StateStore:
         """返回可提交给任务的服务端文件 ID。"""
         return {str(item.get("file_id")) for item in self.files(owner) if item.get("file_id")}
 
-    def add_job(self, job_id: str, owner: str, umo: str, sender_id: str) -> None:
+    def add_job(self, job_id: str, owner: str, umo: str, sender_id: str, delivery_mode: str = "legacy_auto") -> None:
         """登记任务路由，支持重启后继续查询和交付。"""
         with self._lock:
             self._data["jobs"][job_id] = {
                 "owner": owner,
                 "umo": umo,
                 "sender_id": sender_id,
+                "delivery_mode": delivery_mode,
+                "publication": None,
                 "delivered": [],
                 "registered_artifacts": {},
                 "pending_registrations": {},
                 "delivery_pending": False,
             }
             self._save()
+
+    def authorize_publication(self, job_id: str, artifact_ids: list[str]) -> bool:
+        """持久化唯一最终产物选择，重启与发送重试沿用相同选择。"""
+        with self._lock:
+            value = self._data["jobs"].get(job_id)
+            if not value:
+                return False
+            selection = list(dict.fromkeys(artifact_ids))
+            previous = value.get("publication")
+            if previous is not None and set(previous) != set(selection):
+                return False
+            value["publication"] = selection
+            self._save()
+            return True
 
     def job(self, job_id: str) -> dict | None:
         """读取任务路由副本。"""
@@ -97,7 +113,7 @@ class StateStore:
             return [
                 (job_id, deepcopy(value))
                 for job_id, value in self._data["jobs"].items()
-                if not value.get("terminal", False)
+                if not value.get("terminal", False) or value.get("delivery_pending", False)
             ]
 
     def mark_terminal(self, job_id: str, state: str) -> None:

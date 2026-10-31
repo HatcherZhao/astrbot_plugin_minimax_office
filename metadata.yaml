@@ -1,7 +1,7 @@
 name: astrbot_plugin_minimax_office
 display_name: MiniMax Office
 desc: 使用隔离执行服务和 MiniMax 技能生成、读取及修改 Word、Excel、PPT、PDF 文档。
-version: 1.0.0
+version: 1.1.0
 author: zhaoyuqing
 
 repo: https://github.com/HatcherZhao/astrbot_plugin_minimax_office

@@ -17,7 +17,7 @@
 - 生成的文件自动登记为当前用户输入，可以直接说“把刚生成的再改一下”。
 - 修改结果另存，原文件保留；复杂版式仍建议检查生成结果。
 - 可接收旧 `.doc/.xls/.ppt`，通过 LibreOffice 转换后处理。不保证任意 PDF 无损重排、扫描件 OCR 或所有 Office 宏功能。
-- 长任务转后台，完成后自动回传；发送失败会重试，插件重启可恢复待交付任务。
+- 生成与检查结果先作为内部草稿保存；模型通过 `minimax_office_publish` 选择最终文件才发送。长任务可查询，最终交付失败会重试，插件重启可恢复已选定的待交付任务。
 
 ```text
 @机器人 做一份活动报名 Excel，包含姓名、联系方式、报名时间和人数汇总。
@@ -34,7 +34,7 @@
 
 | 位置 | 内容 |
 | --- | --- |
-| 仓库根目录 | AstrBot 插件、配置、四个模型工具 |
+| 仓库根目录 | AstrBot 插件、配置、五个模型工具 |
 | `skills/` | 四套完整技能、参考资料、模板、辅助脚本及许可证 |
 | `runtime/` | 控制器、任务执行器、Dockerfile、依赖清单、测试 |
 | `compose.yaml` | 配套运行服务的资源限制、网络与数据卷 |
@@ -94,7 +94,8 @@ https://github.com/HatcherZhao/astrbot_plugin_minimax_office
 - `minimax_office_guide`：分页读取技能和参考资料。
 - `minimax_office_files`：列出当前用户可用输入。
 - `minimax_office_run`：提交 Python、JavaScript 或 C# 文档处理代码。
-- `minimax_office_status`：查询任务并回传结果。
+- `minimax_office_status`：查询、等待草稿并返回产物信息，不发送文件。
+- `minimax_office_publish`：检查后选择最终产物 ID，仅发送选定文件，不发送调版草稿或预览。
 
 模型应先读对应技能，再运行代码。输入位于 `/work/input`，输出写到 `/work/output`。接口与运行细节见 [服务说明](runtime/README.md)。
 
@@ -113,3 +114,11 @@ python -m pytest -q runtime/tests
 ## 来源与许可证
 
 本项目代码使用 MIT 许可证。四套技能来自 MiniMax-AI/skills，其 MIT 许可证均保留。来源与适配记录见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)、[skills/SOURCES.json](skills/SOURCES.json)。镜像内其他软件遵循各自许可证。
+
+## 1.1.0 交付行为
+
+所有新任务默认仅生成草稿。模型可用草稿返回的 file_id 继续修改、转换或验证，确认后调用 minimax_office_publish(job_id, artifact_ids) 发布最终文件。该调用幂等，不接受其他用户任务或不属于任务的产物。升级前已经在等待交付的旧任务保留原有恢复方式。
+
+插件只发送文件附件，不再附加固定完成提示；最终聊天说明由当前主模型和人格完成。非流式对话里若框架把多个工具轮次的过程说明拼在一起，插件只保留最终回复原文，不修改其称呼或措辞。
+
+视频图文任务应通过视频工具获取原片关键截图，按时间点插入文档；流程图可作补充。此变更只需更新 AstrBot 插件，无需重建文档 worker 镜像。
